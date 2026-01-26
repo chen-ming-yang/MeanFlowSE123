@@ -222,7 +222,7 @@ We gratefully acknowledge **Prof. Xie Chen’s group (X-LANCE Lab, SJTU)** for v
 }
 ```
 
-> **Status:** Submitted to **ICASSP 2026** (under review). We’ll add the official link and updated BibTeX upon acceptance.
+> **Status:** Our article has been accepted by ICASSP2026.
 >
 > **License:** This repository is released under the **MIT License**.
 
