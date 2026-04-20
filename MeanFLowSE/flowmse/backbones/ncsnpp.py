@@ -421,3 +421,29 @@ class NCSNpp(nn.Module):
         h = torch.permute(h, (0, 2, 3, 1)).contiguous()
         h = torch.view_as_complex(h)[:,None, :, :]
         return h
+
+
+@BackboneRegistry.register("ncsnpp_tiny")
+class NCSNppTiny(NCSNpp):
+    """Tiny variant of NCSNpp for fast prototyping / debugging.
+
+    Key differences from the full model:
+        - nf: 128 -> 32              (4x fewer base channels)
+        - ch_mult: 7 levels -> 4     (fewer resolution stages)
+        - num_res_blocks: 2 -> 1     (half the residual blocks)
+    """
+
+    @staticmethod
+    def add_argparse_args(parser):
+        return parser
+
+    def __init__(self, **kwargs):
+        tiny_defaults = dict(
+            nf=32,
+            ch_mult=(1, 2, 2, 2),
+            num_res_blocks=1,
+            attn_resolutions=(16,),
+            image_size=256,
+        )
+        tiny_defaults.update(kwargs)
+        super().__init__(**tiny_defaults)
