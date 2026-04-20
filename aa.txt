@@ -1,0 +1,12 @@
+source /home/cmy/MeanFlowSE/.venv/bin/activate
+sudo nvidia-smi -i 0 -pl 450
+
+
+inference
+
+python evaluate.py \
+  --input_wav /home/cmy/cmy/DNS-Challenge/datasets/dns/datasets.dev_testset/datasets/dev_testset/ms_realrec_emotional_laptopmicrophone_A3U20M3KJ10B1A_Creakingchair_near_Surprised_fileid_5.wav \
+  --folder_destination /home/cmy/cmy/MeanFlowSE123/ \
+  --ckpt /home/cmy/cmy/MeanFlowSE123/lightning_logs/dataset_training_set_10_20260420095842/version_0/checkpoints/last.ckpt \
+  --odesolver euler_mf \
+  --N 5

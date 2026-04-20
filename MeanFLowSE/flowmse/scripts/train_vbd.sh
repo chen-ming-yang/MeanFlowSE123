@@ -1,23 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DATA_DIR=""   # VB-DMD 根目录（需包含 train/valid/test 子目录及 clean/noisy 结构）
-NPROC=4                                           
-BATCH_PER_GPU=2                                   
+TRAIN_DIR="/home/cmy/cmy/DNS-Challenge/datasets/training_set_10"   # 训练集目录（需包含 clean/ 和 noisy/ 子目录）
+VALID_DIR="/home/cmy/cmy/DNS-Challenge/datasets/valid_set_10"     # 验证集目录（需包含 clean/ 和 noisy/ 子目录）
+NPROC=1                                           
+BATCH_PER_GPU=8                                   
 LOG_DIR="lightning_logs"                           
 
 # ==== 建议的环境变量（NCCL/线程） ====
-export CUDA_VISIBLE_DEVICES=0,1,2,3
+export CUDA_VISIBLE_DEVICES=0
 export TORCH_NCCL_BLOCKING_WAIT=1
 export NCCL_ASYNC_ERROR_HANDLING=1
 export OMP_NUM_THREADS=8
 
 # ==== 启动训练 ====
-torchrun --standalone --nproc_per_node="${NPROC}" \
-  ../../train.py \
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TRAIN_PY="${SCRIPT_DIR}/../../train.py"
+
+python "${TRAIN_PY}" \
   --backbone ncsnpp \
   --ode flowmatching \
-  --base_dir "${DATA_DIR}" \
+  --train_set_path "${TRAIN_DIR}" \
+  --valid_set_path "${VALID_DIR}" \
+  --segment_len 2.0 \
+  --use_all_segments \
+  --subset_ratio 0.25 \
   --batch_size "${BATCH_PER_GPU}" \
   --num_workers 8 \
   --max_epochs 150 \
