@@ -41,7 +41,15 @@ if __name__ == '__main__':
     backbone_cls = BackboneRegistry.get_by_name(temp_args.backbone)
     ode_class = ODERegistry.get_by_name(temp_args.ode)
 
-    parser = pl.Trainer.add_argparse_args(parser)
+    # Trainer args (add_argparse_args removed in PL 2.x)
+    parser.add_argument("--max_epochs", type=int, default=150)
+    parser.add_argument("--precision", type=str, default="32")
+    parser.add_argument("--gradient_clip_val", type=float, default=1.0)
+    parser.add_argument("--log_every_n_steps", type=int, default=10)
+    parser.add_argument("--default_root_dir", type=str, default="lightning_logs")
+    parser.add_argument("--num_sanity_val_steps", type=int, default=1)
+    parser.add_argument("--ckpt_path", type=str, default=None,
+                        help="Path to a Lightning .ckpt file to resume training from (optimizer/epoch/step restored).")
     VFModel.add_argparse_args(parser.add_argument_group("VFModel", description=VFModel.__name__))
     ode_class.add_argparse_args(parser.add_argument_group("ODE", description=ode_class.__name__))
     backbone_cls.add_argparse_args(parser.add_argument_group("Backbone", description=backbone_cls.__name__))
@@ -89,17 +97,20 @@ if __name__ == '__main__':
     )
     callbacks = [checkpoint_last, checkpoint_pesq, checkpoint_si_sdr]
 
-    trainer = pl.Trainer.from_argparse_args(
-        args,
+    trainer = pl.Trainer(
+        max_epochs=args.max_epochs,
+        precision=args.precision,
         accelerator='gpu',
         strategy=DDPStrategy(find_unused_parameters=False),
         logger=logger,
         default_root_dir=root_dir,
-        log_every_n_steps=10,
-        num_sanity_val_steps=1,
+        log_every_n_steps=args.log_every_n_steps,
+        num_sanity_val_steps=args.num_sanity_val_steps,
         callbacks=callbacks,
-        gradient_clip_val=getattr(args, "gradient_clip_val", 1.0),
+        gradient_clip_val=args.gradient_clip_val,
     )
 
     # 训练
-    trainer.fit(model)
+    # weights_only=False: our own checkpoints contain pickled objects (e.g. SpecsDataModule);
+    # PyTorch 2.6 made weights_only=True the default, which rejects them.
+    trainer.fit(model, ckpt_path=args.ckpt_path, weights_only=False)

@@ -30,8 +30,10 @@ def _auto_pick_solver(model, user_choice):
 if __name__ == '__main__':
     parser = ArgumentParser()
 
-    parser.add_argument("--test_dir", type=str, required=True,
+    parser.add_argument("--test_dir", type=str, default=None,
                         help="Directory containing the test data (must have test/{clean,noisy}).")
+    parser.add_argument("--input_wav", type=str, default=None,
+                        help="Path to a single noisy .wav file for inference.")
     parser.add_argument("--folder_destination", type=str, required=True,
                         help="Destination path of inference results. Absolute path is required.")
     parser.add_argument("--ckpt", type=str, required=True, help="Path to model checkpoint (.ckpt).")
@@ -56,9 +58,15 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    clean_dir = join(args.test_dir, "test", "clean")
-    noisy_dir = join(args.test_dir, "test", "noisy")
+    if args.input_wav is None and args.test_dir is None:
+        parser.error("one of --input_wav or --test_dir is required")
+
     checkpoint_file = args.ckpt
+    single_file_mode = args.input_wav is not None
+
+    if not single_file_mode:
+        clean_dir = join(args.test_dir, "test", "clean")
+        noisy_dir = join(args.test_dir, "test", "noisy")
 
     sr = 16000
     odesolver_type = args.odesolver_type
@@ -67,11 +75,15 @@ if __name__ == '__main__':
     model = VFModel.load_from_checkpoint(
         checkpoint_file,
         data_module_cls=SpecsDataModule,
-        map_location=device
+        map_location=device,
+        weights_only=False
     )
     model = model.eval(no_ema=False).to(device)
 
-    noisy_files = sorted(glob.glob(f"{noisy_dir}/*.wav"))
+    if single_file_mode:
+        noisy_files = [args.input_wav]
+    else:
+        noisy_files = sorted(glob.glob(f"{noisy_dir}/*.wav"))
 
     target_dir = f"{args.folder_destination}/"
     ensure_dir(target_dir + "files/")
@@ -93,9 +105,9 @@ if __name__ == '__main__':
     for _, noisy_file in tqdm(list(enumerate(noisy_files)), total=len(noisy_files)):
         filename = noisy_file.split('/')[-1]
 
-
-        x, _ = load(join(clean_dir, filename))  
         y, _ = load(noisy_file)
+        if not single_file_mode:
+            x, _ = load(join(clean_dir, filename))
 
         T_orig = y.size(1)
         norm_factor = y.abs().max().item()

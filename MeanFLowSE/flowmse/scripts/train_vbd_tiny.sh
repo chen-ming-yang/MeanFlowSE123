@@ -7,16 +7,29 @@ set -euo pipefail
 # suitable for fast iteration / debugging on a single GPU.
 # ============================================================
 
-DATA_DIR=""   # VB-DMD root (must contain train/valid/test with clean/noisy)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TRAIN_PY="${SCRIPT_DIR}/../../train.py"
+
+DATA_DIR="/home/cmy/cmy/DNS-Challenge/datasets/mfse_dataset"   # VB-DMD root (must contain train/valid/test with clean/noisy)
 NPROC=1                                           
 BATCH_PER_GPU=8                                   
 LOG_DIR="lightning_logs"                           
 
+# Optional: resume from a Lightning .ckpt.
+# Pass as 1st arg:  bash train_vbd_tiny.sh /path/to/last.ckpt
+# Or via env var:   CKPT_PATH=/path/to/last.ckpt bash train_vbd_tiny.sh
+CKPT_PATH="${1:-${CKPT_PATH:-}}"
+RESUME_ARGS=()
+if [[ -n "${CKPT_PATH}" ]]; then
+  echo "[train_vbd_tiny] Resuming from checkpoint: ${CKPT_PATH}"
+  RESUME_ARGS=(--ckpt_path "${CKPT_PATH}")
+fi
+
 export CUDA_VISIBLE_DEVICES=0
 
 torchrun --standalone --nproc_per_node="${NPROC}" \
-  ../../train.py \
-  --backbone ncsnpp_tiny \
+  "${TRAIN_PY}" \
+  --backbone ncsnpp_small \
   --ode flowmatching \
   --base_dir "${DATA_DIR}" \
   --batch_size "${BATCH_PER_GPU}" \
@@ -42,4 +55,5 @@ torchrun --standalone --nproc_per_node="${NPROC}" \
   --mf_skip_weight_thresh 0.05 \
   --val_metrics_every_n_epochs 1 \
   --log_every_n_steps 10 \
-  --default_root_dir "${LOG_DIR}"
+  --default_root_dir "${LOG_DIR}" \
+  "${RESUME_ARGS[@]}"
