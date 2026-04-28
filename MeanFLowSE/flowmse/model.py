@@ -11,9 +11,7 @@ import torch.distributed as dist
 from flowmse import sampling
 from flowmse.odes import ODERegistry
 from flowmse.backbones import BackboneRegistry
-from flowmse.util.inference import evaluate_model
 from flowmse.util.other import pad_spec
-import matplotlib.pyplot as plt
 import random
 
 
@@ -361,9 +359,18 @@ class VFModel(pl.LightningModule):
 
             if run_eval and (nfiles > 0):
                 if self.trainer.is_global_zero:
-                    pesq, si_sdr, estoi = evaluate_model(self, nfiles)
-                    m = torch.tensor([float(pesq), float(si_sdr), float(estoi)],
-                                     device=device, dtype=torch.float32)
+                    try:
+                        from flowmse.util.inference import evaluate_model
+
+                        pesq, si_sdr, estoi = evaluate_model(self, nfiles)
+                        m = torch.tensor([float(pesq), float(si_sdr), float(estoi)],
+                                         device=device, dtype=torch.float32)
+                    except ModuleNotFoundError as exc:
+                        warnings.warn(
+                            f"Skipping validation metrics because an optional dependency is missing: {exc}"
+                        )
+                        m = torch.tensor([float('-inf'), float('-inf'), float('-inf')],
+                                         device=device, dtype=torch.float32)
                 else:
                     m = torch.zeros(3, device=device, dtype=torch.float32)
                 if dist.is_available() and dist.is_initialized():

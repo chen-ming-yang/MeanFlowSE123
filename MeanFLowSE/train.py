@@ -13,7 +13,7 @@ from flowmse.odes import ODERegistry
 from flowmse.model import VFModel
 
 from datetime import datetime
-import pytz
+from zoneinfo import ZoneInfo
 
 
 def get_argparse_groups(parser, args):
@@ -64,8 +64,7 @@ if __name__ == '__main__':
     arg_groups = get_argparse_groups(parser, args)
 
     dataset = os.path.basename(os.path.normpath(arg_groups['DataModule'].base_dir))
-    kst = pytz.timezone('Asia/Seoul')
-    now_kst = datetime.now(kst)
+    now_kst = datetime.now(ZoneInfo('Asia/Seoul'))
     formatted_time_kst = now_kst.strftime("%Y%m%d%H%M%S")
     exp_name = f"dataset_{dataset}_{formatted_time_kst}"
 

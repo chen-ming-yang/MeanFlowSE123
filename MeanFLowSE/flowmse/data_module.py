@@ -1,5 +1,5 @@
 
-from os.path import join
+from os.path import isdir, join
 import torch
 import pytorch_lightning as pl
 from torch.utils.data import Dataset
@@ -26,11 +26,19 @@ class Specs(Dataset):
 
         # Read file paths according to file naming format.
         if format == "default":
-            self.clean_files = sorted(glob(join(data_dir, subset) + '/clean/*.wav'))
-            self.noisy_files = sorted(glob(join(data_dir, subset) + '/noisy/*.wav'))
+            subset_dir = self._resolve_subset_dir(data_dir, subset)
+            noisy_dir = self._resolve_noisy_dir(data_dir, subset_dir)
+            self.clean_files = sorted(glob(join(data_dir, subset_dir, 'clean', '*.wav')))
+            self.noisy_files = sorted(glob(join(data_dir, subset_dir, noisy_dir, '*.wav')))
         else:
             # Feel free to add your own directory format
             raise NotImplementedError(f"Directory format {format} unknown!")
+
+        if len(self.clean_files) == 0 or len(self.noisy_files) == 0:
+            raise FileNotFoundError(
+                f"No paired wav files found for subset '{subset}' under '{data_dir}'. "
+                "Expected directories like train/clean + train/noisy or training_set_10/clean + training_set_10/noisy."
+            )
 
         self.dummy = dummy
         self.num_frames = num_frames
@@ -42,6 +50,28 @@ class Specs(Dataset):
         self.stft_kwargs = stft_kwargs
         self.hop_length = self.stft_kwargs["hop_length"]
         assert self.stft_kwargs.get("center", None) == True, "'center' must be True for current implementation"
+
+    @staticmethod
+    def _resolve_subset_dir(data_dir, subset):
+        subset_aliases = {
+            'train': ('train', 'training_set_10', 'training', 'train_set'),
+            'valid': ('valid', 'valid_set_10', 'validation', 'val', 'valid_set'),
+            'test': ('test', 'test_set_10', 'test_set'),
+        }
+
+        for candidate in subset_aliases.get(subset, (subset,)):
+            if isdir(join(data_dir, candidate)):
+                return candidate
+
+        return subset
+
+    @staticmethod
+    def _resolve_noisy_dir(data_dir, subset_dir):
+        for candidate in ('noisy', 'noise'):
+            if isdir(join(data_dir, subset_dir, candidate)):
+                return candidate
+
+        return 'noisy'
 
     def __getitem__(self, i):
         x, _ = load(self.clean_files[i])
