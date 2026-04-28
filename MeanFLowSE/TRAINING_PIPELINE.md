@@ -4,6 +4,15 @@
 
 MeanFlow-SE is a speech enhancement system based on **Flow Matching** with an optional **Mean Flow (MFSE)** training branch. The model learns a velocity field that transforms noisy speech spectrograms into clean ones via an ODE-based generative process, and can optionally learn an *average* velocity field enabling single-step (1-NFE) inference.
 
+To stabilise training (the from-scratch flow-matching objective is prone to early NaNs), training is organised into **two stages**:
+
+| Stage | Goal | Loss | Flag | Epochs (typical) |
+|-------|------|------|------|------------------|
+| **1. Direct denoising** | Warm start: learn a stable one-step denoiser | `MSE(x_T - T·v_pred, x_clean)` | `--use_direct_denoising` | 20–40 |
+| **2. Generative fine-tune** | Flow-matching (+ optional MFSE) from Stage-1 weights | CFM `+` MFSE | (no `--use_direct_denoising`, optionally `--use_mfse`) | 100–150 |
+
+Stage 2 inherits **weights only** (model + EMA shadow) from Stage 1 via `--init_ckpt`, so the optimizer/epoch counters and all MFSE schedules restart fresh.
+
 ---
 
 ## Pipeline Diagram
@@ -260,7 +269,69 @@ For each noisy file:
 
 ---
 
-## Training Command Example
+## Two-Stage Training
+
+### Why two stages?
+
+Training the flow-matching CFM loss (and especially the MFSE branch with JVP targets) **directly from a random initialization** is numerically fragile: the conditional velocity target `v_target = (y - x_clean) + (σ_max - σ_min)·z` has a large stochastic component, and very early in training the network output magnitude can blow up, producing `NaN` losses within the first few hundred steps.
+
+Pretraining the same network as a **plain one-step denoiser** sidesteps this problem entirely:
+
+* The target is the deterministic clean spectrogram, not a noisy velocity vector.
+* The loss is bounded once the network learns to copy `y → x_clean`-ish.
+* The learned weights are already a reasonable starting point for the `t = T_rev` end of the flow path, which is exactly the most ill-conditioned region for flow matching.
+
+### Stage 1 — Direct denoising (`--use_direct_denoising`)
+
+When this flag is set, [`VFModel._step`](MeanFLowSE/flowmse/model.py) ignores the flow-matching / MFSE pipeline and runs:
+
+```
+T          = T_rev
+x_T, _     = ode.prior_sampling(shape, y)        # x_T = y + σ_T · z
+v_pred     = model(x_T, T, y, r=None)            # r=None → Δ=0 in backbone
+x_hat      = x_T - T * v_pred                    # one-step Euler T → 0
+loss       = MSE(x_hat, x_clean)
+```
+
+So the network is reparameterised as a one-step denoiser whose output velocity satisfies `v* = (x_T - x_clean)/T`. Because the network is queried only at `t = T_rev`, **validation must also use the same one-step path** — this is handled automatically inside [`evaluate_model`](MeanFLowSE/flowmse/util/inference.py) by checking `model.use_direct_denoising`.
+
+Run it with:
+
+```bash
+bash flowmse/scripts/train_stage1_denoise.sh
+```
+
+### Stage 2 — Generative fine-tune (`--init_ckpt`)
+
+Stage 2 starts from the Stage-1 checkpoint **with weights only** (optimizer, epoch and step are *not* restored). [`train.py`](MeanFLowSE/train.py) does this via the new `--init_ckpt` argument: it loads the `state_dict` and the EMA shadow into the freshly-built model before `trainer.fit` is called.
+
+Run it with:
+
+```bash
+bash flowmse/scripts/train_stage2_generative.sh \
+     lightning_logs/<stage1_exp>/version_0/checkpoints/<epoch>_last.ckpt
+```
+
+`--init_ckpt` and `--ckpt_path` are mutually exclusive:
+
+| Argument        | Restores weights | Restores EMA | Restores optimizer / epoch / step |
+|-----------------|:---------------:|:------------:|:---------------------------------:|
+| `--init_ckpt`   | ✓               | ✓ (if present) | ✗                                 |
+| `--ckpt_path`   | ✓               | ✓             | ✓                                 |
+
+Use `--ckpt_path` to fully resume an interrupted Stage-2 run; use `--init_ckpt` to bootstrap Stage 2 from Stage 1.
+
+### Behaviour summary
+
+| Mode | `_step` loss | Validation sampler | Suitable inference path |
+|------|--------------|--------------------|--------------------------|
+| Stage 1 (`--use_direct_denoising`) | `MSE(x_T - T·v, x_clean)` | one-step `x_T - T·v` (built into `evaluate_model`) | one-step direct denoise |
+| Stage 2 (default) | CFM | multi-step Euler ODE | multi-step Euler |
+| Stage 2 (`--use_mfse`) | CFM + MFSE | Euler-MF (1-step if `--use_mf_sampler`, else multi-step) | 1-NFE Euler-MF |
+
+---
+
+## Single-Stage Training Command (legacy / quick start)
 
 ```bash
 torchrun --standalone --nproc_per_node=4 \
@@ -306,5 +377,7 @@ torchrun --standalone --nproc_per_node=4 \
 | `flowmse/drift_diffusion.py` | Drift/diffusion terms for SDE counterpart |
 | `flowmse/util/inference.py` | `evaluate_model()`: validation-time metric computation |
 | `evaluate.py` | Standalone inference script |
-| `flowmse/scripts/train_vbd.sh` | Example multi-GPU training shell script |
+| `flowmse/scripts/train_vbd.sh` | Example multi-GPU training shell script (single-stage, legacy) |
+| `flowmse/scripts/train_stage1_denoise.sh` | **Stage-1** direct-denoising pretraining script |
+| `flowmse/scripts/train_stage2_generative.sh` | **Stage-2** flow-matching / MFSE fine-tuning script (consumes Stage-1 ckpt via `--init_ckpt`) |
 | `run_inference.sh` | Example inference shell script (multi-step / 1-step modes) |

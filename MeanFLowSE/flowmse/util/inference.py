@@ -42,14 +42,26 @@ def evaluate_model(model, num_eval_files, inference_N=N):
 
         y = y * norm_factor
 
-        use_mf = getattr(model, "use_mf_sampler", False) or (inference_N == 1)
-        solver_name = "euler_mf" if use_mf else "euler"
+        if getattr(model, "use_direct_denoising", False):
+            # Stage-1 / direct-denoising mode: the network was trained ONLY at t = T_rev
+            # to predict v* = (x_T - x_clean)/T_rev (one-step Euler from T -> 0).
+            # Running a multi-step ODE solver here would query the net at unseen t values.
+            # So we evaluate the same one-step path used during training.
+            with torch.no_grad():
+                x_T, _ = model.ode.prior_sampling(Y.shape, Y.to(device))
+                x_T = x_T.to(Y.device)
+                t_full = torch.ones(Y.shape[0], device=Y.device) * T_rev
+                v_pred = model(x_T, t_full, Y.to(device), r=None)
+                sample = x_T - T_rev * v_pred
+        else:
+            use_mf = getattr(model, "use_mf_sampler", False) or (inference_N == 1)
+            solver_name = "euler_mf" if use_mf else "euler"
 
-        sampler = get_white_box_solver(
-            solver_name, model.ode, model, Y.to(device),
-            T_rev=T_rev, t_eps=t_eps, N=inference_N
-        )
-        sample, _ = sampler()
+            sampler = get_white_box_solver(
+                solver_name, model.ode, model, Y.to(device),
+                T_rev=T_rev, t_eps=t_eps, N=inference_N
+            )
+            sample, _ = sampler()
         sample = sample.squeeze()
 
         x_hat = model.to_audio(sample.squeeze(), T_orig)

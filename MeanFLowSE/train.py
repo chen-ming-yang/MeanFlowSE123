@@ -50,6 +50,11 @@ if __name__ == '__main__':
     parser.add_argument("--num_sanity_val_steps", type=int, default=1)
     parser.add_argument("--ckpt_path", type=str, default=None,
                         help="Path to a Lightning .ckpt file to resume training from (optimizer/epoch/step restored).")
+    parser.add_argument("--init_ckpt", type=str, default=None,
+                        help="Path to a .ckpt file from which only model weights (and EMA) are loaded "
+                             "before training starts. Optimizer, epoch and step are NOT restored. "
+                             "Use this to start stage-2 (generative fine-tuning) from a stage-1 "
+                             "(direct-denoising) pretrained checkpoint. Mutually exclusive with --ckpt_path.")
     VFModel.add_argparse_args(parser.add_argument_group("VFModel", description=VFModel.__name__))
     ode_class.add_argparse_args(parser.add_argument_group("ODE", description=ode_class.__name__))
     backbone_cls.add_argparse_args(parser.add_argument_group("Backbone", description=backbone_cls.__name__))
@@ -113,4 +118,31 @@ if __name__ == '__main__':
     # 训练
     # weights_only=False: our own checkpoints contain pickled objects (e.g. SpecsDataModule);
     # PyTorch 2.6 made weights_only=True the default, which rejects them.
+    if args.init_ckpt and args.ckpt_path:
+        raise ValueError("--init_ckpt and --ckpt_path are mutually exclusive: "
+                         "use --ckpt_path to fully resume, or --init_ckpt to load weights only.")
+
+    if args.init_ckpt:
+        import torch as _torch
+        print(f"[train] Loading weights only from --init_ckpt: {args.init_ckpt}")
+        _ckpt = _torch.load(args.init_ckpt, map_location="cpu", weights_only=False)
+        _state = _ckpt.get("state_dict", _ckpt)
+        missing, unexpected = model.load_state_dict(_state, strict=False)
+        if missing:
+            print(f"[train]   missing keys ({len(missing)}): "
+                  f"{missing[:8]}{' ...' if len(missing) > 8 else ''}")
+        if unexpected:
+            print(f"[train]   unexpected keys ({len(unexpected)}): "
+                  f"{unexpected[:8]}{' ...' if len(unexpected) > 8 else ''}")
+        # Also restore EMA shadow if present, so warm start is consistent.
+        _ema = _ckpt.get("ema", None)
+        if _ema is not None:
+            try:
+                model.ema.load_state_dict(_ema)
+                print("[train]   EMA shadow weights restored from init_ckpt.")
+            except Exception as _e:
+                print(f"[train]   WARNING: failed to restore EMA from init_ckpt ({_e}); "
+                      f"keeping EMA initialized from current model parameters.")
+        del _ckpt, _state
+
     trainer.fit(model, ckpt_path=args.ckpt_path, weights_only=False)

@@ -54,6 +54,9 @@ class VFModel(pl.LightningModule):
                             help="Run expensive evaluate_model every N epochs. <=0 means never (but placeholders will still be logged).")
         parser.add_argument("--val_metrics_num_files", type=int, default=None,
                             help="Override number of files used in evaluate_model during validation. If None, fall back to num_eval_files.")
+        parser.add_argument("--use_direct_denoising", action="store_true",
+                            help="Train as a plain denoiser: loss = MSE(one-step output, clean). "
+                                 "Ignores flow-matching and MFSE losses.")
         # ------------------------------------------------------------------
         return parser
 
@@ -66,6 +69,7 @@ class VFModel(pl.LightningModule):
         use_mf_sampler=False,
         mf_jvp_impl="auto", mf_jvp_chunk=0, mf_skip_weight_thresh=0.0,
         mf_first_order_coef=0.5, val_metrics_every_n_epochs=20, val_metrics_num_files=None,
+        use_direct_denoising=False,
         **kwargs
     ):
         super().__init__()
@@ -107,6 +111,7 @@ class VFModel(pl.LightningModule):
         self.mf_first_order_coef = float(mf_first_order_coef)
         self.val_metrics_every_n_epochs = int(val_metrics_every_n_epochs) if val_metrics_every_n_epochs is not None else 0
         self.val_metrics_num_files = val_metrics_num_files if (val_metrics_num_files is None or val_metrics_num_files > 0) else None
+        self.use_direct_denoising = use_direct_denoising
 
         self.save_hyperparameters(ignore=['no_wandb'])
         self.data_module = data_module_cls(**kwargs, gpu=torch.cuda.is_available())
@@ -266,6 +271,20 @@ class VFModel(pl.LightningModule):
 
     def _step(self, batch, batch_idx):
         x1, y = batch
+
+        # ---- Direct denoising mode: loss = MSE(one-step output, clean) ----
+        if self.use_direct_denoising:
+            T = self.T_rev
+            t_full = torch.full((x1.shape[0],), T, device=x1.device)
+            x_T, _ = self.ode.prior_sampling(x1.shape, y)  # x_T = y + sigma_T * z
+            v_pred = self(x_T, t_full, y, r=None)
+            # One Euler step from T → 0: x_out = x_T - T * v_pred
+            x_out = x_T - T * v_pred
+            loss = self._mse_loss(x_out, x1)
+            self.log('train_loss_direct', loss, on_step=True, on_epoch=True)
+            return loss
+        # --------------------------------------------------------------------
+
         rdm = (1 - torch.rand(x1.shape[0], device=x1.device)) * (self.T_rev - self.t_eps) + self.t_eps
         t = torch.min(rdm, torch.tensor(self.T_rev, device=x1.device))
 
