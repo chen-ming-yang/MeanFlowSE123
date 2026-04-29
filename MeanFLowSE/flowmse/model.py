@@ -72,8 +72,11 @@ class VFModel(pl.LightningModule):
     ):
         super().__init__()
         # Initialize Backbone DNN
+        # Match FlowAVSE: stage1 pure denoising uses a discriminative=True backbone (no time conditioning)
         dnn_cls = BackboneRegistry.get_by_name(backbone)
-        self.dnn = dnn_cls(**{**kwargs, "scale_by_sigma": False})
+        self.dnn = dnn_cls(**{**kwargs,
+                              "scale_by_sigma": False,
+                              "discriminative": bool(use_direct_denoising)})
 
         ode_cls = ODERegistry.get_by_name(ode)
         self.ode = ode_cls(**kwargs)
@@ -195,8 +198,8 @@ class VFModel(pl.LightningModule):
 
     def _fd_jvp_chunked(self, xt, t, y_const, r_const, v_dir, t_dir):
         """
-        有限差分 JVP，按 batch 维分块以节省显存。
-        返回：与 forward(x,t,y,r) 形状一致的张量（已 clip，已 detach）
+        Finite-difference JVP, chunked along the batch dim to save memory.
+        Returns: a tensor with the same shape as forward(x,t,y,r) (already clipped and detached).
         """
         B = xt.shape[0]
         out = torch.zeros_like(v_dir)
@@ -227,11 +230,11 @@ class VFModel(pl.LightningModule):
 
     def _safe_jvp(self, xt, t, y, r, v_dir, t_dir):
         """
-        计算 JVP: (v,1)·(∂_x u, ∂_t u) = v ∂_x u + ∂_t u
-        - 'autograd'：torch.autograd.functional.jvp（更快但可能占显存）
-        - 'fd'：中心差分（两次前向）；支持按 batch 分块
-        - 'auto'：尝试 autograd，失败则回退 fd
-        * 所有实现均返回已裁剪、detach 的张量（不反传二阶）
+        Compute JVP: (v,1)·(∂_x u, ∂_t u) = v ∂_x u + ∂_t u
+        - 'autograd': torch.autograd.functional.jvp (faster but may use more memory)
+        - 'fd':       central differences (two forward passes); supports batch chunking
+        - 'auto':     try autograd first, fall back to fd on failure
+        * All implementations return a clipped, detached tensor (no second-order backprop).
         """
         impl = getattr(self, "mf_jvp_impl", "auto")
 
@@ -273,9 +276,9 @@ class VFModel(pl.LightningModule):
         # ---- Direct denoising mode: loss = MSE(one-step output, clean) ----
         if self.use_direct_denoising:
             T = self.T_rev
-            t_full = torch.full((x1.shape[0],), T, device=x1.device)
             x_T, _ = self.ode.prior_sampling(x1.shape, y)  # x_T = y + sigma_T * z
-            v_pred = self(x_T, t_full, y, r=None)
+            # Match the FlowAVSE discriminative path: stage1 does not pass t
+            v_pred = self(x_T, None, y, r=None)
             # One Euler step from T → 0: x_out = x_T - T * v_pred
             x_out = x_T - T * v_pred
             loss = self._mse_loss(x_out, x1)
@@ -387,12 +390,15 @@ class VFModel(pl.LightningModule):
 
     def forward(self, x, t, y, r=None):
         """
-        统一前向：
-        - 若 r is None -> Δ = 0 -> 与 FlowSE 瞬时场路径等价
-        - 若 r 给定     -> Δ = t - r 作为第二时间条件注入 Backbone
+        Unified forward pass:
+        - If t is None    -> discriminative / stage1 pure-denoising path; no time conditioning is passed
+        - If r is None    -> Δ = 0 -> equivalent to the FlowSE instantaneous-field path
+        - If r is given   -> Δ = t - r is injected into the backbone as a second time condition
         """
         dnn_input = torch.cat([x, y], dim=1)
-        if r is None:
+        if t is None:
+            d = None
+        elif r is None:
             d = torch.zeros_like(t)
         else:
             d = (t - r).clamp_min(0.0)

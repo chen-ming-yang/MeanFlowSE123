@@ -22,19 +22,19 @@ default_initializer = layers.default_init
 @BackboneRegistry.register("ncsnpp")
 class NCSNpp(nn.Module):
     """NCSN++ model, adapted from https://github.com/yang-song/score_sde repository
-       改动：
-       1) 支持两个时间条件：t（主时间）与 d = t - r（段长度）
-       2) 新增 delta 嵌入分支（与 t 的嵌入同型），合并方式：相加
-       3) scale_by_sigma 开关控制末端是否 ÷ used_sigmas（默认 False）
+       Changes:
+       1) Supports two time conditions: t (main time) and d = t - r (segment length)
+       2) Adds a delta embedding branch (same shape as the t embedding); merged by addition
+       3) scale_by_sigma switch controls whether the output is divided by used_sigmas (default False)
     """
 
     @staticmethod
     def add_argparse_args(parser):
-        # 可选：暴露 scale_by_sigma 等开关；此处保持最小侵入，不新增 CLI
+        # Optional: expose scale_by_sigma etc.; kept minimally invasive, no new CLI flags
         return parser
 
     def __init__(self,
-        scale_by_sigma = False,             # 改为默认 False（原代码默认 True）
+        scale_by_sigma = False,             # default changed to False (original default was True)
         nonlinearity = 'swish',
         nf = 128,
         ch_mult = (1, 1, 2, 2, 2, 2, 2),
@@ -54,10 +54,18 @@ class NCSNpp(nn.Module):
         image_size = 256,
         embedding_type = 'fourier',
         dropout = .0,
+        discriminative = False,   # New: matches FlowAVSE -- pure discriminative (stage1 direct denoising) mode
         **unused_kwargs
     ):
         super().__init__()
         self.act = act = get_act(nonlinearity)
+
+        # Match FlowAVSE: in discriminative mode, force-disable time conditioning / sigma scaling
+        self.discriminative = discriminative
+        if self.discriminative:
+            conditional = False
+            scale_by_sigma = False
+            print("Running NCSN++ as discriminative backbone (no time conditioning)")
 
         self.nf = nf = nf
         ch_mult = ch_mult
@@ -69,7 +77,7 @@ class NCSNpp(nn.Module):
         self.all_resolutions = all_resolutions = [image_size // (2 ** i) for i in range(num_resolutions)]
 
         self.conditional = conditional = conditional  # noise-conditional
-        self.scale_by_sigma = scale_by_sigma          # <- 新增：开关
+        self.scale_by_sigma = scale_by_sigma          # <- new switch
 
         fir = fir
         fir_kernel = [1, 3, 3, 1]
@@ -91,7 +99,7 @@ class NCSNpp(nn.Module):
         modules = []
         # timestep/noise_level embedding
         if embedding_type == 'fourier':
-            # t 的 Gaussian Fourier 特征
+            # Gaussian Fourier features for t
             modules.append(layerspp.GaussianFourierProjection(
                 embedding_size=nf, scale=fourier_scale
             ))
@@ -109,8 +117,8 @@ class NCSNpp(nn.Module):
             modules[-1].weight.data = default_initializer()(modules[-1].weight.shape)
             nn.init.zeros_(modules[-1].bias)
 
-        # --------- 新增：Delta（d = t - r）嵌入分支（单独的 Module，不占用 modules 索引） ----------
-        if embedding_type == 'fourier':
+        # --------- New: delta (d = t - r) embedding branch (separate Module, does not consume `modules` indices) ----------
+        if embedding_type == 'fourier' and not self.discriminative:
             self.delta_gfproj = layerspp.GaussianFourierProjection(
                 embedding_size=nf, scale=fourier_scale
             )
@@ -121,7 +129,7 @@ class NCSNpp(nn.Module):
             self.delta_fc2.weight.data = default_initializer()(self.delta_fc2.weight.shape)
             nn.init.zeros_(self.delta_fc2.bias)
         else:
-            # 兼容性占位（本项目一直用 fourier）
+            # Discriminative or non-fourier: do not use the delta branch
             self.delta_gfproj = None
             self.delta_fc1 = None
             self.delta_fc2 = None
@@ -255,7 +263,7 @@ class NCSNpp(nn.Module):
 
         self.all_modules = nn.ModuleList(modules)
 
-    def forward(self, x, time_t, time_d=None):
+    def forward(self, x, time_t=None, time_d=None):
         # timestep/noise_level embedding; only for continuous training
         modules = self.all_modules
         m_idx = 0
@@ -264,18 +272,29 @@ class NCSNpp(nn.Module):
         x = torch.cat((x[:,[0],:,:].real, x[:,[0],:,:].imag,
                 x[:,[1],:,:].real, x[:,[1],:,:].imag), dim=1)
 
+        # Match FlowAVSE: time_t may be None (discriminative / stage1 pure denoising); skip time embedding then
+        used_sigmas = None
         if self.embedding_type == 'fourier':
-            used_sigmas = time_t.clamp(min=1e-4)  # 这里的 used_sigmas 实际代表 "time_t"
-            temb = modules[m_idx](torch.log(used_sigmas))
-            m_idx += 1
+            if time_t is None:
+                temb = None
+                m_idx += 1  # skip GaussianFourierProjection (always at modules[0]; keep indices consistent)
+            else:
+                used_sigmas = time_t.clamp(min=1e-4)  # `used_sigmas` here actually represents "time_t"
+                temb = modules[m_idx](torch.log(used_sigmas))
+                m_idx += 1
         elif self.embedding_type == 'positional':
-            timesteps = time_t
-            used_sigmas = time_t
-            temb = layers.get_timestep_embedding(timesteps, self.nf)
+            if time_t is None:
+                temb = None
+            else:
+                timesteps = time_t
+                used_sigmas = time_t
+                temb = layers.get_timestep_embedding(timesteps, self.nf)
         else:
             raise ValueError(f'embedding type {self.embedding_type} unknown.')
 
         if self.conditional:
+            # In discriminative mode conditional=False, so this branch is skipped and won't advance m_idx by mistake
+            assert temb is not None, "NCSNpp: conditional=True requires non-None time_t"
             temb = modules[m_idx](temb)
             m_idx += 1
             temb = modules[m_idx](self.act(temb))
@@ -283,10 +302,10 @@ class NCSNpp(nn.Module):
         else:
             temb = None
 
-        # --------- 融合 delta（d = t - r）的时间嵌入（若提供） ----------
+        # --------- Fuse the delta (d = t - r) time embedding (if provided) ----------
         if (time_d is not None) and (self.delta_gfproj is not None):
             td = time_d.clamp(min=0.0)  # d >= 0
-            temb_d = self.delta_gfproj(torch.log1p(td))  # log1p 稳定 0
+            temb_d = self.delta_gfproj(torch.log1p(td))  # log1p for numerical stability near 0
             temb_d = self.delta_fc1(temb_d)
             temb_d = self.act(temb_d)
             temb_d = self.delta_fc2(temb_d)
@@ -412,8 +431,8 @@ class NCSNpp(nn.Module):
 
         assert m_idx == len(modules), "Implementation error"
 
-        # 末端缩放改为可控开关（默认 False）
-        if self.scale_by_sigma:
+        # Final scaling is now a configurable switch (default False)
+        if self.scale_by_sigma and (used_sigmas is not None):
             h = h / used_sigmas[:, None, None, None]
 
         # Convert back to complex number

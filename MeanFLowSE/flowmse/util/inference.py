@@ -50,8 +50,8 @@ def evaluate_model(model, num_eval_files, inference_N=N):
             with torch.no_grad():
                 x_T, _ = model.ode.prior_sampling(Y.shape, Y.to(device))
                 x_T = x_T.to(Y.device)
-                t_full = torch.ones(Y.shape[0], device=Y.device) * T_rev
-                v_pred = model(x_T, t_full, Y.to(device), r=None)
+                # Match FlowAVSE: stage1 discriminative path does not pass t
+                v_pred = model(x_T, None, Y.to(device), r=None)
                 sample = x_T - T_rev * v_pred
         else:
             use_mf = getattr(model, "use_mf_sampler", False) or (inference_N == 1)
