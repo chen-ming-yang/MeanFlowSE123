@@ -7,9 +7,6 @@ from scipy.signal import butter, sosfilt
 
 import torch
 
-from pesq import pesq
-from pystoi import stoi
-
 
 def si_sdr_components(s_hat, s, n):
     """
@@ -97,6 +94,9 @@ def ensure_dir(file_path):
 
 
 def print_metrics(x, y, x_hat_list, labels, sr=16000):
+    from pesq import pesq
+    from pystoi import stoi
+
     _si_sdr_mix = si_sdr(x, y)
     _pesq_mix = pesq(sr, x, y, 'wb')
     _estoi_mix = stoi(x, y, sr, extended=True)

@@ -18,7 +18,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TRAIN_PY="${SCRIPT_DIR}/../../train.py"
 
-DATA_DIR="/home/cmy/cmy/DNS-Challenge/datasets/mfse_dataset"
+DATA_DIR="${DATA_DIR:-/cmy/cmy/enhance}"   # Dataset root; accepts train/valid or training_set_10/valid_set_10 layouts.
 NPROC=1
 BATCH_PER_GPU=8
 LOG_DIR="lightning_logs"
@@ -30,7 +30,7 @@ export OMP_NUM_THREADS=8
 
 torchrun --standalone --nproc_per_node="${NPROC}" \
   "${TRAIN_PY}" \
-  --backbone ncsnpp \
+  --backbone ncsnpp_small \
   --ode flowmatching \
   --base_dir "${DATA_DIR}" \
   --batch_size "${BATCH_PER_GPU}" \
