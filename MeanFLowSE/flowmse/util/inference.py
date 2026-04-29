@@ -1,8 +1,6 @@
 import torch
 from torchaudio import load
 import torch.nn.functional as F
-from pesq import pesq
-from pystoi import stoi
 
 from .other import si_sdr, pad_spec
 from ..sampling import get_white_box_solver
@@ -12,6 +10,9 @@ sr = 16000
 N = 5
 
 def evaluate_model(model, num_eval_files, inference_N=N):
+    from pesq import pesq
+    from pystoi import stoi
+
     device = next(model.parameters()).device
 
     T_rev = model.T_rev

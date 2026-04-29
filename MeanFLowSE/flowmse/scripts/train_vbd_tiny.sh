@@ -10,9 +10,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TRAIN_PY="${SCRIPT_DIR}/../../train.py"
 
-DATA_DIR="/home/cmy/cmy/DNS-Challenge/datasets/mfse_dataset"   # VB-DMD root (must contain train/valid/test with clean/noisy)
+DATA_DIR="${DATA_DIR:-/cmy/cmy/enhance}"   # Dataset root; accepts train/valid or training_set_10/valid_set_10 layouts.
 NPROC=1                                           
-BATCH_PER_GPU=8                                   
+BATCH_PER_GPU=8                                  
 LOG_DIR="lightning_logs"                           
 
 # Optional: resume from a Lightning .ckpt.
