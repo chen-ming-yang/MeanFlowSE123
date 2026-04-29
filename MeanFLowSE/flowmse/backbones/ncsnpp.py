@@ -156,15 +156,19 @@ class NCSNpp(nn.Module):
             pyramid_downsample = functools.partial(layerspp.Downsample,
                 fir=fir, fir_kernel=fir_kernel, with_conv=True)
 
+        # In discriminative mode no time embedding is fed to ResnetBlocks,
+        # so set temb_dim=None to avoid creating unused Dense_0 layers (DDP would complain).
+        rb_temb_dim = None if self.discriminative else nf * 4
+
         if resblock_type == 'ddpm':
             ResnetBlock = functools.partial(ResnetBlockDDPM, act=act,
                 dropout=dropout, init_scale=init_scale,
-                skip_rescale=skip_rescale, temb_dim=nf * 4)
+                skip_rescale=skip_rescale, temb_dim=rb_temb_dim)
 
         elif resblock_type == 'biggan':
             ResnetBlock = functools.partial(ResnetBlockBigGAN, act=act,
                 dropout=dropout, fir=fir, fir_kernel=fir_kernel,
-                init_scale=init_scale, skip_rescale=skip_rescale, temb_dim=nf * 4)
+                init_scale=init_scale, skip_rescale=skip_rescale, temb_dim=rb_temb_dim)
 
         else:
             raise ValueError(f'resblock type {resblock_type} unrecognized.')
