@@ -99,10 +99,11 @@ class NCSNpp(nn.Module):
         modules = []
         # timestep/noise_level embedding
         if embedding_type == 'fourier':
-            # Gaussian Fourier features for t
-            modules.append(layerspp.GaussianFourierProjection(
-                embedding_size=nf, scale=fourier_scale
-            ))
+            if not self.discriminative:
+                # Gaussian Fourier features for t (skipped in discriminative mode where t is unused)
+                modules.append(layerspp.GaussianFourierProjection(
+                    embedding_size=nf, scale=fourier_scale
+                ))
             embed_dim = 2 * nf
         elif embedding_type == 'positional':
             embed_dim = nf
@@ -277,7 +278,8 @@ class NCSNpp(nn.Module):
         if self.embedding_type == 'fourier':
             if time_t is None:
                 temb = None
-                m_idx += 1  # skip GaussianFourierProjection (always at modules[0]; keep indices consistent)
+                # In discriminative mode the GaussianFourierProjection was not created,
+                # so we must NOT advance m_idx here.
             else:
                 used_sigmas = time_t.clamp(min=1e-4)  # `used_sigmas` here actually represents "time_t"
                 temb = modules[m_idx](torch.log(used_sigmas))
