@@ -48,8 +48,9 @@ torchrun --standalone --nproc_per_node="${NPROC}" \
   --default_root_dir "${LOG_DIR}"
 
 # Notes:
-# - --use_direct_denoising disables flow-matching / MFSE losses; the network is
-#   trained purely as: x_hat = x_T - T*model(x_T, T, y, r=None);  loss = MSE(x_hat, x_clean).
+# - --use_direct_denoising disables flow-matching / MFSE losses; it also switches
+#   the backbone to discriminative=True (no time embedding, FlowAVSE-style), so the
+#   forward call is: x_hat = x_T - T * model(x_T, t=None, y, r=None);  loss = MSE(x_hat, x_clean).
 # - Validation also runs the same one-step path (see flowmse/util/inference.py),
 #   so PESQ/SI-SDR/ESTOI here reflect Stage-1 denoiser quality.
 # - Suggested duration: 20-40 epochs is usually enough as a warm start.
