@@ -6,7 +6,6 @@ import torch
 from .odesolvers import ODEsolver, ODEsolverRegistry
 
 import numpy as np
-import matplotlib.pyplot as plt
 
 
 __all__ = [

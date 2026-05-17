@@ -9,22 +9,45 @@ from tqdm import tqdm
 from soundfile import write
 
 from flowmse.model import VFModel
-from flowmse.data_module import SpecsDataModule  
+from flowmse.data_module import SpecsDataModule
 from flowmse.util.other import pad_spec
 from flowmse.sampling import get_white_box_solver
 from utils import ensure_dir
 
 
 def _auto_pick_solver(model, user_choice):
-    """
-    根据模型开关与用户显式传入的采样器名称来确定最终采样器。
-    - 若用户明确指定，则尊重用户；
-    - 否则：use_mfse==True -> 'euler_mf'；反之 'euler'。
-    """
     if user_choice is not None:
         return user_choice
     use_mf = getattr(model, "use_mfse", False)
     return "euler_mf" if use_mf else "euler"
+
+
+class _DiscriminativeWrapper:
+    """
+    Wraps a VFModel trained with --use_direct_denoising (discriminative=True, no time conditioning).
+    
+    At training time, forward() is always called with t=None.  During inference the ODE solver
+    passes a non-None t, which would crash the NCSNpp backbone (no GaussianFourierProjection was built).
+
+    This wrapper intercepts every VF_fn(x, t, y, r=None) call and replaces t with None so that the
+    forward pass is identical to the training path.
+    """
+    def __init__(self, model):
+        self._model = model
+        self.use_direct_denoising = getattr(model, "use_direct_denoising", False)
+        self.T_rev = model.T_rev
+
+    def __call__(self, x, t, y, r=None):
+        # Always pass t=None to match the discriminative training path.
+        return self._model(x, None, y, r=None)
+
+    def eval(self):
+        self._model.eval()
+        return self
+
+    def to(self, device):
+        self._model.to(device)
+        return self
 
 
 if __name__ == '__main__':
@@ -37,7 +60,6 @@ if __name__ == '__main__':
     parser.add_argument("--folder_destination", type=str, required=True,
                         help="Destination path of inference results. Absolute path is required.")
     parser.add_argument("--ckpt", type=str, required=True, help="Path to model checkpoint (.ckpt).")
-
 
     parser.add_argument("--odesolver_type", type=str, choices=("white",), default="white",
                         help="Sampler family. We use 'white' (Euler family).")
@@ -80,6 +102,15 @@ if __name__ == '__main__':
     )
     model = model.eval(no_ema=False).to(device)
 
+    # --- Discriminative (stage1): direct spectrogram regression -------------
+    # The patched model outputs clean spectrogram directly (no ODE, no velocity).
+    # Just do one forward pass: clean_pred = model(noisy_spec, None, noisy_spec)
+    use_direct = getattr(model, "use_direct_denoising", False)
+    if use_direct:
+        print("Stage-1 direct regression model — using one-shot forward pass (no ODE)")
+        model_direct = model
+    # -------------------------------------------------------------------------
+
     if single_file_mode:
         noisy_files = [args.input_wav]
     else:
@@ -116,19 +147,26 @@ if __name__ == '__main__':
         Y = torch.unsqueeze(model._forward_transform(model._stft(y.to(device))), 0)
         Y = pad_spec(Y)
 
-        if odesolver_type == "white":
-            sampler = get_white_box_solver(
-                solver_name, model.ode, model, Y=Y, Y_prior=Y,
-                T_rev=reverse_starting_point, t_eps=reverse_end_point, N=N_eff
-            )
+        if use_direct:
+            # Direct regression: forward pass with t=None → clean spectrogram
+            # Feed noisy spectrogram directly (no prior_sampling noise).
+            with torch.no_grad():
+                clean_spec = model_direct(Y, None, Y, r=None)  # [1,1,F,T_padded]
+                sample = clean_spec.squeeze()  # [F, T_padded]
         else:
-            raise ValueError(f"{odesolver_type} is not a valid sampler type!")
+            if odesolver_type == "white":
+                sampler = get_white_box_solver(
+                    solver_name, model.ode, model, Y=Y, Y_prior=Y,
+                    T_rev=reverse_starting_point, t_eps=reverse_end_point, N=N_eff
+                )
+            else:
+                raise ValueError(f"{odesolver_type} is not a valid sampler type!")
 
-        with torch.no_grad():
-            sample, _ = sampler()
-            sample = sample.squeeze()
+            with torch.no_grad():
+                sample, _ = sampler()
+                sample = sample.squeeze()
 
-        x_hat = model.to_audio(sample, T_orig)
+        x_hat = model.to_audio(sample.unsqueeze(0), T_orig)  # [F,T] → [1,1,F,T]
         x_hat = x_hat * norm_factor
 
         write(target_dir + "files/" + filename, x_hat.squeeze().cpu().numpy(), sr)

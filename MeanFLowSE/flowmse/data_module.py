@@ -1,4 +1,5 @@
 
+import os
 from os.path import isdir, join
 import torch
 import pytorch_lightning as pl
@@ -28,8 +29,10 @@ class Specs(Dataset):
         if format == "default":
             subset_dir = self._resolve_subset_dir(data_dir, subset)
             noisy_dir = self._resolve_noisy_dir(data_dir, subset_dir)
-            self.clean_files = sorted(glob(join(data_dir, subset_dir, 'clean', '*.wav')))
-            self.noisy_files = sorted(glob(join(data_dir, subset_dir, noisy_dir, '*.wav')))
+            self.clean_files, self.noisy_files = self._pair_by_fileid(
+                glob(join(data_dir, subset_dir, 'clean', '*.wav')),
+                glob(join(data_dir, subset_dir, noisy_dir, '*.wav')),
+            )
         else:
             # Feel free to add your own directory format
             raise NotImplementedError(f"Directory format {format} unknown!")
@@ -72,6 +75,33 @@ class Specs(Dataset):
                 return candidate
 
         return 'noisy'
+
+    @staticmethod
+    def _pair_by_fileid(clean_paths, noisy_paths):
+        """Pair clean/noisy files by fileid extracted from filenames."""
+        import re
+        fileid_re = re.compile(r'fileid_(\d+)')
+
+        clean_by_id = {}
+        for p in clean_paths:
+            m = fileid_re.search(os.path.basename(p))
+            if m:
+                clean_by_id[m.group(1)] = p
+
+        noisy_by_id = {}
+        for p in noisy_paths:
+            m = fileid_re.search(os.path.basename(p))
+            if m:
+                noisy_by_id[m.group(1)] = p
+
+        common_ids = sorted(
+            set(clean_by_id.keys()) & set(noisy_by_id.keys()),
+            key=int
+        )
+        paired_clean = [clean_by_id[fid] for fid in common_ids]
+        paired_noisy = [noisy_by_id[fid] for fid in common_ids]
+
+        return paired_clean, paired_noisy
 
     def __getitem__(self, i):
         x, _ = load(self.clean_files[i])

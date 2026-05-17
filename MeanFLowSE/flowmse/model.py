@@ -55,6 +55,10 @@ class VFModel(pl.LightningModule):
         parser.add_argument("--use_direct_denoising", action="store_true",
                             help="Train as a plain denoiser: loss = MSE(one-step output, clean). "
                                  "Ignores flow-matching and MFSE losses.")
+        parser.add_argument("--loss_lowfreq_weight", type=float, default=0.3,
+                            help="Weight of the low-frequency L1 auxiliary loss in direct-denoising mode. "
+                                 "PESQ is heavily weighted toward lower frequencies (~0-4 kHz); "
+                                 "giving the model a gradient there prevents the identity-mapping trap.")
         # ------------------------------------------------------------------
         return parser
 
@@ -66,8 +70,8 @@ class VFModel(pl.LightningModule):
         mf_r_equals_t_prob=0.1, mf_jvp_clip=5.0, mf_jvp_eps=1e-3,
         use_mf_sampler=False,
         mf_jvp_impl="auto", mf_jvp_chunk=0, mf_skip_weight_thresh=0.0,
-        mf_first_order_coef=0.5, val_metrics_every_n_epochs=20, val_metrics_num_files=None,
-        use_direct_denoising=False,
+        mf_first_order_coef=0.5, val_metrics_every_n_epochs=2, val_metrics_num_files=None,
+        use_direct_denoising=False, loss_lowfreq_weight=0.3,
         **kwargs
     ):
         super().__init__()
@@ -113,6 +117,7 @@ class VFModel(pl.LightningModule):
         self.val_metrics_every_n_epochs = int(val_metrics_every_n_epochs) if val_metrics_every_n_epochs is not None else 0
         self.val_metrics_num_files = val_metrics_num_files if (val_metrics_num_files is None or val_metrics_num_files > 0) else None
         self.use_direct_denoising = use_direct_denoising
+        self.loss_lowfreq_weight = float(loss_lowfreq_weight)
 
         self.save_hyperparameters(ignore=['no_wandb'])
         self.data_module = data_module_cls(**kwargs, gpu=torch.cuda.is_available())
@@ -273,16 +278,31 @@ class VFModel(pl.LightningModule):
     def _step(self, batch, batch_idx):
         x1, y = batch
 
-        # ---- Direct denoising mode: loss = MSE(one-step output, clean) ----
+        # ---- Direct denoising mode: direct clean spectrogram regression ----
         if self.use_direct_denoising:
-            T = self.T_rev
-            x_T, _ = self.ode.prior_sampling(x1.shape, y)  # x_T = y + sigma_T * z
-            # Match the FlowAVSE discriminative path: stage1 does not pass t
-            v_pred = self(x_T, None, y, r=None)
-            # One Euler step from T → 0: x_out = x_T - T * v_pred
-            x_out = x_T - T * v_pred
-            loss = self._mse_loss(x_out, x1)
-            self.log('train_loss_direct', loss, on_step=True, on_epoch=True)
+            # Feed noisy spectrogram directly — no prior_sampling noise addition.
+            # The model learns: clean = f(noisy, noisy)
+            clean_pred = self(y, None, y, r=None)
+
+            # Primary MSE loss on the full spectrogram
+            loss_mse = self._mse_loss(clean_pred, x1)
+
+            # Fix 2: Multi-resolution low-frequency perceptual auxiliary loss.
+            # PESQ is dominated by ~0-4 kHz; applying L1 on raw-magnitude low-freq bins
+            # gives the model a gradient that pushes beyond identity mapping.
+            # Undo spec_factor scaling to work in raw-magnitude space.
+            LF_BINS = 64  # ~4 kHz for n_fft=510, 256 freq bins at 16 kHz
+            sf = self.data_module.spec_factor
+            pred_lf = clean_pred[:, :, :LF_BINS, :] / sf
+            tgt_lf   = x1[:, :, :LF_BINS, :]  / sf
+            loss_lf = torch.mean(torch.abs(pred_lf - tgt_lf).reshape(x1.shape[0], -1).sum(dim=1))
+
+            loss = loss_mse + self.loss_lowfreq_weight * loss_lf
+
+            self.log('train_loss', loss, on_step=True, on_epoch=True)
+            self.log('train_loss_mse', loss_mse, on_step=True, on_epoch=True)
+            self.log('train_loss_lf', loss_lf, on_step=True, on_epoch=True)
+            self.log('train_loss_direct', loss_mse, on_step=True, on_epoch=True)  # legacy
             return loss
         # --------------------------------------------------------------------
 
@@ -397,7 +417,8 @@ class VFModel(pl.LightningModule):
         """
         dnn_input = torch.cat([x, y], dim=1)
         if t is None:
-            d = None
+            # Discriminative mode: direct clean spectrogram regression (no velocity)
+            return self.dnn(dnn_input, None, None)
         elif r is None:
             d = torch.zeros_like(t)
         else:
