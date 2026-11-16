@@ -4,7 +4,7 @@ set -euo pipefail
 cd /cmy/cmy/MeanFlowSE123/MeanFLowSE
 
 python train.py \
-  --backbone ncsnpp_tiny \
+  --backbone ncsnpp_base \
   --ode flowmatching \
   --base_dir /cmy/cmy/enhance \
   --batch_size 8 \

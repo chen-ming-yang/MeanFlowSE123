@@ -475,6 +475,33 @@ class NCSNppTiny(NCSNpp):
         super().__init__(**tiny_defaults)
 
 
+@BackboneRegistry.register("ncsnpp_base")
+class NCSNppBase(NCSNpp):
+    """Base variant of NCSNpp — between Tiny and Small.
+
+    Key differences from the full model:
+        - nf: 128 -> 48              (base channels between tiny=32 and small=64)
+        - ch_mult: 7 levels -> 5     (same depth as small)
+        - num_res_blocks: 2 -> 2     (same as full)
+    Approx. 7 M parameters.
+    """
+
+    @staticmethod
+    def add_argparse_args(parser):
+        return parser
+
+    def __init__(self, **kwargs):
+        base_defaults = dict(
+            nf=32,
+            ch_mult=(1, 2, 2, 4, 4),
+            num_res_blocks=2,
+            attn_resolutions=(16,),
+            image_size=256,
+        )
+        base_defaults.update(kwargs)
+        super().__init__(**base_defaults)
+
+
 @BackboneRegistry.register("ncsnpp_small")
 class NCSNppSmall(NCSNpp):
     """Small variant of NCSNpp — a middle ground between Tiny and the full model.

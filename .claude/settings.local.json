@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//cmy/cmy/enhance/training_set_10/**)",
+      "Read(//cmy/cmy/enhance/valid_set_10/**)"
+    ]
+  }
+}

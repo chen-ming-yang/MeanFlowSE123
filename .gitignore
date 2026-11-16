@@ -1,0 +1,20 @@
+# training artifacts / checkpoints
+ckpt.last
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+lightning_logs/
+results/
+
+# caches / local junk
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+*.log
+nohup.out
+.DS_Store

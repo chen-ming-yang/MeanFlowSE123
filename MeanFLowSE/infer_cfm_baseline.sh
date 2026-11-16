@@ -6,10 +6,10 @@ cd /cmy/cmy/MeanFlowSE123/MeanFLowSE
 # ==============================================================================
 # Pure CFM baseline 推理：多步 Euler ODE 求解
 # ==============================================================================
-INPUT_WAV="${INPUT_WAV:-/cmy/cmy/enhance/valid_set_10/noisy/book_11346_chp_0030_reader_00812_8_zQP6GRQPSIA_snr12_tl-25_fileid_89653.wav}"
+INPUT_WAV="${INPUT_WAV:-/cmy/cmy/enhance/valid_set_10/noisy/book_11223_chp_0046_reader_10452_10_xYKYs_r4nsQ_snr-2_tl-16_fileid_89740.wav}"
 
 FOLDER_DESTINATION="${FOLDER_DESTINATION:-/cmy/cmy/MeanFlowSE123/MeanFLowSE}"
-CKPT="${CKPT:-/cmy/cmy/MeanFlowSE123/MeanFLowSE/lightning_logs/cfm_baseline/version_0/checkpoints/last.ckpt}"
+CKPT="${CKPT:-/cmy/cmy/MeanFlowSE123/MeanFLowSE/lightning_logs/dataset_enhance_20260520013151/version_0/checkpoints/epoch=30_last.ckpt}"
 
 N="${N:-30}"
 
